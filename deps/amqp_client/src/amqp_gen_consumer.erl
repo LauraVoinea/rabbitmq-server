@@ -211,139 +211,241 @@
 % ======
 
 -module(amqp_gen_consumer).
+%% gen_consumer.erl
+%% This module replaces amqp_gen_consumer using gen_statem with state_functions.
 -behaviour(gen_statem).
 
-% -include_lib("rabbit_common/include/rabbit.hrl").
-% -include_lib("rabbit_common/include/rabbit_framing.hrl").
+%% Exported functions
+-export([start_link/2, callback_mode/0, init/1, terminate/3, code_change/3]).
+-export([call_consumer/2, call_consumer/3, call_consumer/4]).
+-export([send_processing_complete/1, send_basic_cancel/1, send_basic_consume/1, send_register_default_consumer/1]).
+-export([state1/3, state2/3, state3/3, state4/3, state5/3, state6/3, state8/3, state11/3]).
 
-% Import AMQP records
--include("amqp_client.hrl").
+%% Include necessary headers
+-include_lib("amqp_client.hrl").
 
--export([start_link/2, callback_mode/0, init/1, terminate/3]).
-
--export([send_bogus1/1, send_bogus2/1, send_basic_cancel/1, send_basic_consume/1, state1/3, state2/3, state3/3, state4/3, state5/3, state7/3, state9/3]).
-
+%% Type definitions
+% -define(STATE_DATA, state_data).
 -record(state_data, {
-    channel_pid = undefined, 
-    consumers = #{}, 
-    default_consumer = none, 
-    monitors = #{}, 
-    mc_counter_1 = 0 :: integer(),
-    amqp_module = undefined,   % Track the AMQP module
-    amqp_state = undefined     % Track the AMQP module's state
+    channel_pid  :: pid(),
+    callback_module :: module()
 }).
 
 -type state_data() :: #state_data{}.
 
--callback state9(atom(),{pid(), {basic_cancel_ok}}, state_data()) -> {stop, normal, state_data()}.
--callback state7(atom(),{bogus2}, state_data()) -> {stop, normal, state_data()}.
--callback state5(atom(),{bogus1}, state_data()) -> {stop, normal, state_data()}.
--callback state4(atom(),{pid(), {basic_deliver}} | {pid(), {default_consumer_deliver}} |  basic_cancel_choice, state_data()) -> {next_state, state5, state_data()} | {next_state, state7, state_data()} | {next_state, state9, state_data()}.
--callback state3(atom(),{pid(), {temp}} | {pid(), {basic_cancel}}, state_data()) -> {next_state, state4, state_data()} | {stop, normal, state_data()}.
--callback state2(atom(),{pid(), {basic_consume_ok}}, state_data()) -> {next_state, state3, state_data()}.
--callback state1(atom(),{basic_consume}, state_data()) -> {next_state, state2, state_data()}.
-
+%% Start link function
 -spec start_link(module(), list()) -> {ok, pid()} | {error, any()}.
 start_link(CallbackModule, Args) ->
+    % gen_statem:start_link({local, CallbackModule}, ?MODULE, {CallbackModule, Args}, []).
     case code:ensure_loaded(CallbackModule) of
         {module, CallbackModule} ->
-            gen_statem:start_link({local, CallbackModule}, gen_consumer, {CallbackModule, Args}, []);
+            gen_statem:start_link({local, CallbackModule}, amqp_gen_consumer, {CallbackModule, Args}, []);
         {error, Reason} ->
             {error, Reason}
     end.
 
+
+%% Callback mode
 callback_mode() ->
     state_functions.
 
-% -spec init({module(), list()}) -> {ok, state1, state_data()}.
-init({CallbackModule, Args}) ->
-    io:format("gen_consumer: Initializing with callback module ~p~n", [CallbackModule]),
-    % Initialize the AMQP consumer module (amqp_gen_consumer)
-    {ok, AmqpState} = amqp_gen_consumer:init(Args),
-    put(callback_module, CallbackModule),
-    {ok, state1, #state_data{amqp_module = amqp_gen_consumer, amqp_state = AmqpState}}.
+%% @spec (Consumer, Msg) -> ok
+%% where
+%%      Consumer = pid()
+%%      Msg = any()
+%%
+%% @doc This function is used to perform arbitrary calls into the
+%% consumer module.
+call_consumer(Pid, Msg) ->
+    gen_server2:call(Pid, {consumer_call, Msg}, amqp_util:call_timeout()).
 
-% -spec send_bogus1(pid()) -> ok.
-send_bogus1(ChannelPid) -> 
-    gen_statem:cast(ChannelPid, {self(), {bogus1}}).
- 
-% -spec send_bogus2(pid()) -> ok.
-send_bogus2(ChannelPid) -> 
-    gen_statem:cast(ChannelPid, {self(), {bogus2}}).
- 
-% -spec send_basic_cancel(pid()) -> ok.
-send_basic_cancel(ChannelPid) -> 
+%% @spec (Consumer, Method, Args) -> ok
+%% where
+%%      Consumer = pid()
+%%      Method = amqp_method()
+%%      Args = any()
+%%
+%% @doc This function is used by amqp_channel to forward received
+%% methods and deliveries to the consumer module.
+call_consumer(Pid, Method, Args) ->
+    gen_server2:call(Pid, {consumer_call, Method, Args}, amqp_util:call_timeout()).
+
+call_consumer(Pid, Method, Args, DeliveryCtx) ->
+    gen_server2:call(Pid, {consumer_call, Method, Args, DeliveryCtx}, amqp_util:call_timeout()).
+
+
+%% Init function
+-spec init({module(), list()}) -> {ok, atom(), state_data()}.
+init({CallbackModule, _Args}) ->
+    io:format("gen_consumer: Initializing with callback module ~p~n", [CallbackModule]),
+    %% Initialize state data without waiting for processes
+    % ChannelPid = erlang:self(), %% Placeholder: Replace with actual channel PID
+    % StateData = #state_data{
+    %     channel_pid = ChannelPid,
+    %     callback_module = CallbackModule
+    % },
+    % {ok, state1, StateData}.
+    io:format("gen_consumer: Initializing with callback module ~p~n", [CallbackModule]),
+    put(callback_module, CallbackModule),
+    CallbackModule:init([]). 
+
+
+%% Send functions
+-spec send_processing_complete(pid()) -> ok.
+send_processing_complete(ChannelPid) ->
+    gen_statem:cast(ChannelPid, {self(), {processing_complete}}).
+
+-spec send_basic_cancel(pid()) -> ok.
+send_basic_cancel(ChannelPid) ->
     gen_statem:cast(ChannelPid, {self(), {basic_cancel}}).
- 
-% -spec send_basic_consume(pid()) -> ok.
-send_basic_consume(ChannelPid) -> 
+
+-spec send_basic_consume(pid()) -> ok.
+send_basic_consume(ChannelPid) ->
     gen_statem:cast(ChannelPid, {self(), {basic_consume}}).
 
-% -spec state1(atom(), {basic_consume}, state_data()) -> {next_state, state2, state_data()}.
-state1(_EventType, {basic_consume}, Data) ->
-    % CallbackModule = get(callback_module),
-    AmqpModule = Data#state_data.amqp_module,
-    AmqpState = Data#state_data.amqp_state,
-    % Handle the basic.consume event in the amqp_gen_consumer
-    {ok, NewAmqpState} = AmqpModule:handle_consume(#'basic.consume'{}, self(), AmqpState),
-    {next_state, state2, Data#state_data{amqp_state = NewAmqpState}}.
+-spec send_register_default_consumer(pid()) -> ok.
+send_register_default_consumer(ChannelPid) ->
+    gen_statem:cast(ChannelPid, {self(), {register_default_consumer}}).
 
-% -spec state2(atom(), {pid(), {basic_consume_ok}}, state_data()) -> {next_state, state3, state_data()}.
-state2(_, {_, {basic_consume_ok}, Counter}, #state_data{mc_counter_1 = MC} = Data) when Counter < MC ->
-    {keep_state, Data};
-state2(EventType, {ChannelPid, {basic_consume_ok}, _}, Data) ->
-    CallbackModule = get(callback_module),
-    AmqpModule = Data#state_data.amqp_module,
-    AmqpState = Data#state_data.amqp_state,
-    % Handle the basic.consume_ok event in the amqp_gen_consumer
-    {ok, NewAmqpState} = AmqpModule:handle_consume_ok(#'basic.consume_ok'{}, #'basic.consume'{}, AmqpState),
-    CallbackModule:state2(EventType, {ChannelPid, {basic_consume_ok}}, Data#state_data{amqp_state = NewAmqpState}).
+%% State functions
 
-% -spec state3(atom(), {pid(), {temp}} | {pid(), {basic_cancel}}, state_data()) -> {next_state, state4, state_data()} | {stop, normal, state_data()}.
-state3(EventType, {ChannelPid, {temp}, _}, Data) ->
+%%% State1: Initial state
+-spec state1(atom(), {register_default_consumer}, state_data()) -> 
+    {next_state, state2, state_data()} | 
+    {next_state, state2, state_data(), [term()]}.
+state1(EventType, {register_default_consumer}, Data) ->
     CallbackModule = get(callback_module),
-    CallbackModule:state3(EventType, {ChannelPid, {temp}}, Data);
-state3(EventType, {ChannelPid, {basic_cancel}, _}, Data) ->
-    CallbackModule = get(callback_module),
-    AmqpModule = Data#state_data.amqp_module,
-    AmqpState = Data#state_data.amqp_state,
-    % Handle the basic.cancel event in the amqp_gen_consumer
-    {ok, NewAmqpState} = AmqpModule:handle_cancel(#'basic.cancel'{}, AmqpState),
-    CallbackModule:state3(EventType, {ChannelPid, {basic_cancel}}, Data#state_data{amqp_state = NewAmqpState}).
+    CallbackModule:state1(EventType, {register_default_consumer}, Data).
 
-% -spec state4(atom(), {pid(), {basic_deliver}} | {pid(), {default_consumer_deliver}} |  basic_cancel_choice, state_data()) -> {next_state, state5, state_data()} | {next_state, state7, state_data()} | {next_state, state9, state_data()}.
-state4(EventType, {ChannelPid, {basic_deliver}, #amqp_msg{} = Msg}, Data) ->
+% should match up with handle_consume
+% send basic.consume to the server
+% need Sender pid in here as well
+-spec state2(atom(), {basic_consume}, state_data()) -> 
+    {next_state, state3, state_data()}.
+state2(EventType, {basic_consume}, Data) ->
     CallbackModule = get(callback_module),
-    AmqpModule = Data#state_data.amqp_module,
-    AmqpState = Data#state_data.amqp_state,
-    % Handle the basic.deliver event in the amqp_gen_consumer
-    {ok, NewAmqpState} = AmqpModule:handle_deliver(#'basic.deliver'{}, Msg, AmqpState),
-    CallbackModule:state4(EventType, {ChannelPid, {basic_deliver}, Msg}, Data#state_data{amqp_state = NewAmqpState});
-state4(EventType, {ChannelPid, {default_consumer_deliver}, _}, Data) ->
+    CallbackModule:state2(EventType, {basic_consume}, Data).
+
+% basic.consume_ok response is received from the server.
+-spec state3(atom(), {pid(), {basic_consume_ok}}, state_data()) -> 
+    {next_state, state4, state_data()} | 
+    {next_state, state4, state_data(), [term()]}.
+state3(cast, {ChannelPid, {basic_consume_ok}}, Data) ->
     CallbackModule = get(callback_module),
-    CallbackModule:state4(EventType, {ChannelPid, {default_consumer_deliver}}, Data);
+    CallbackModule:state3(cast, {ChannelPid, {basic_consume_ok}}, Data).
+
+-spec state4(atom(), {pid(), {process_message}} | 
+    {pid(), {basic_cancel}} |  basic_cancel_choice |  
+    {_ChannelPid, {basic_deliver}} |  
+    {_ChannelPid, {basic_cancel_ok}}, state_data()) -> 
+        {next_state, state5, state_data()} | 
+        {next_state, state5, state_data(), [term()]} | 
+        {stop, normal, state_data()} | 
+        {next_state, state11, state_data()} | 
+        {keep_state, state_data()}.
+state4(EventType, {ChannelPid, {process_message}}, Data) ->
+    CallbackModule = get(callback_module),
+    CallbackModule:state4(cast, {ChannelPid, {process_message}}, Data);
+state4(EventType, {ChannelPid, {basic_cancel}}, Data) ->
+    CallbackModule = get(callback_module),
+    CallbackModule:state4(cast, {ChannelPid, {basic_cancel}}, Data);
 state4(EventType, basic_cancel_choice, Data) ->
     CallbackModule = get(callback_module),
-    CallbackModule:state4(EventType, basic_cancel_choice, Data).
+    CallbackModule:state4(EventType, basic_cancel_choice, Data);
+state4(_EventType, {_ChannelPid, {basic_deliver}}, Data) ->
+    % Discard outdated message
+    {keep_state, Data};
+state4(_EventType, {_ChannelPid, {basic_cancel_ok}}, Data) ->
+    % Discard outdated message
+    {keep_state, Data}.
 
-% -spec state5(atom(), {bogus1}, state_data()) -> {stop, normal, state_data()}.
-state5(EventType, {bogus1}, Data) ->
+-spec state5(atom(), {pid(), {basic_deliver}} |  
+    basic_cancel_choice |  
+    {_ChannelPid, {process_message}} |  
+    {_ChannelPid, {basic_cancel_ok}}, state_data()) -> 
+        {next_state, state6, state_data()} | 
+        {next_state, state6, state_data(), [term()]} | 
+        {next_state, state8, state_data()} | 
+        {keep_state, state_data()}.
+state5(cast, {ChannelPid, {basic_deliver}}, Data) ->
     CallbackModule = get(callback_module),
-    CallbackModule:state5(EventType, {bogus1}, Data).
-
-% -spec state7(atom(), {bogus2}, state_data()) -> {stop, normal, state_data()}.
-state7(EventType, {bogus2}, Data) ->
+    CallbackModule:state5(cast, {ChannelPid, {basic_deliver}}, Data);
+state5(EventType, basic_cancel_choice, Data) ->
     CallbackModule = get(callback_module),
-    CallbackModule:state7(EventType, {bogus2}, Data).
+    CallbackModule:state5(EventType, basic_cancel_choice, Data);
+state5(_EventType, {_ChannelPid, {process_message}}, Data) ->
+    % Discard outdated message
+    {keep_state, Data};
+state5(_EventType, {_ChannelPid, {basic_cancel_ok}}, Data) ->
+    % Discard outdated message
+    {keep_state, Data}.
 
-% -spec state9(atom(), {pid(), {basic_cancel_ok}}, state_data()) -> {stop, normal, state_data()}.
-state9(EventType, {ChannelPid, {basic_cancel_ok}}, Data) ->
+-spec state6(atom(), {processing_complete} | 
+    {_ChannelPid, {process_message}} | 
+    {_ChannelPid, {basic_deliver}} |  
+    {_ChannelPid, {basic_cancel}} |  
+    {_ChannelPid, {basic_cancel_ok}}, state_data()) -> 
+        {next_state, state4, state_data()} | 
+        {next_state, state4, state_data(), [term()]} | 
+        {keep_state, state_data()}.
+state6(EventType, {processing_complete}, Data) ->
     CallbackModule = get(callback_module),
-    AmqpModule = Data#state_data.amqp_module,
-    AmqpState = Data#state_data.amqp_state,
-    % Handle the basic.cancel_ok event in the amqp_gen_consumer
-    {ok, NewAmqpState} = AmqpModule:handle_cancel_ok(#'basic.cancel_ok'{}, AmqpState),
-    CallbackModule:state9(EventType, {ChannelPid, {basic_cancel_ok}}, Data#state_data{amqp_state = NewAmqpState}).
+    CallbackModule:state6(EventType, {processing_complete}, Data);
+state6(_EventType, {_ChannelPid, {process_message}}, Data) ->
+    % Discard outdated message
+    {keep_state, Data};
+state6(_EventType, {_ChannelPid, {basic_deliver}}, Data) ->
+    % Discard outdated message
+    {keep_state, Data};
+state6(_EventType, {_ChannelPid, {basic_cancel}}, Data) ->
+    % Discard outdated message
+    {keep_state, Data};
+state6(_EventType, {_ChannelPid, {basic_cancel_ok}}, Data) ->
+    % Discard outdated message
+    {keep_state, Data}.
 
-terminate(_, _, _) ->
-    io:format("Terminating the gen_consumer process~n").
+-spec state8(atom(), {pid(), {basic_cancel_ok}} |  
+    {_ChannelPid, {process_message}} |  
+    {_ChannelPid, {basic_deliver}} |  
+    {_ChannelPid, {basic_cancel}}, state_data()) -> 
+        {stop, normal, state_data()} | 
+        {keep_state, state_data()}.
+state8(cast, {ChannelPid, {basic_cancel_ok}}, Data) ->
+    CallbackModule = get(callback_module),
+    CallbackModule:state8(cast, {ChannelPid, {basic_cancel_ok}}, Data);
+state8(_EventType, {_ChannelPid, {process_message}}, Data) ->
+    % Discard outdated message
+    {keep_state, Data};
+state8(_EventType, {_ChannelPid, {basic_deliver}}, Data) ->
+    % Discard outdated message
+    {keep_state, Data};
+state8(_EventType, {_ChannelPid, {basic_cancel}}, Data) ->
+    % Discard outdated message
+    {keep_state, Data}.
+
+-spec state11(atom(), {pid(), {basic_cancel_ok}} |  
+    {_ChannelPid, {process_message}} |  
+    {_ChannelPid, {basic_deliver}} |  
+    {_ChannelPid, {basic_cancel}}, state_data()) -> 
+        {stop, normal, state_data()} | 
+        {keep_state, state_data()}.
+state11(cast, {ChannelPid, {basic_cancel_ok}}, Data) ->
+    CallbackModule = get(callback_module),
+    CallbackModule:state11(cast, {ChannelPid, {basic_cancel_ok}}, Data);
+state11(_EventType, {_ChannelPid, {process_message}}, Data) ->
+    % Discard outdated message
+    {keep_state, Data};
+state11(_EventType, {_ChannelPid, {basic_deliver}}, Data) ->
+    % Discard outdated message
+    {keep_state, Data};
+state11(_EventType, {_ChannelPid, {basic_cancel}}, Data) ->
+    % Discard outdated message
+    {keep_state, Data}.
+
+%% Terminate function
+terminate(_Reason, _StateName, _Data) ->
+    io:format("Terminating consumer ~p~n", [self()]),
+    ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
